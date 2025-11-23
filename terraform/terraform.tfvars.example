@@ -1,0 +1,66 @@
+# =============================================================================
+# TERRAFORM VARIABLES CONFIGURATION
+# Copy this file to terraform.tfvars and customize for your environment
+# =============================================================================
+
+# Basic Configuration
+aws_region   = "us-east-1"
+project_name = "rss-chat"
+environment  = "dev"  # dev, staging, prod
+
+# Database Configuration
+db_username = "rss_user"
+db_password = "your-secure-password-here"  # Use AWS Secrets Manager in production
+
+# Port Configuration
+alb_http_port     = 80
+alb_https_port    = 443
+app_port          = 8501
+health_check_path = "/"
+
+# ECR Security Settings
+ecr_image_tag_mutability    = "IMMUTABLE"  # IMMUTABLE for prod, MUTABLE for dev
+ecr_lifecycle_image_count   = 5
+ecr_enable_encryption       = true
+
+# ECS Configuration
+# ECS Configuration
+ecs_cpu                = 256   # 256, 512, 1024, 2048, 4096
+ecs_memory             = 512   # Must be compatible with CPU
+ecs_desired_count      = 1     # Number of tasks
+ecs_log_retention_days = 30
+docker_image_tag       = "latest"
+
+# ECR Image URI (Set this after pushing your image to ECR)
+# Format: <account-id>.dkr.ecr.<region>.amazonaws.com/<repository-name>:<tag>
+# ecr_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/rss-chat-dev:latest"
+
+# RDS Configuration
+rds_instance_class            = "db.t3.micro"  # db.t3.small for prod
+rds_allocated_storage         = 20
+rds_max_allocated_storage     = 100
+rds_backup_retention_period   = 7              # 30+ for prod
+rds_multi_az                  = false          # true for prod
+rds_deletion_protection       = true           # always true for prod
+rds_backup_window             = "03:00-04:00"
+rds_maintenance_window        = "sun:04:00-sun:05:00"
+
+# S3 Configuration
+s3_encryption_type        = "KMS"
+s3_enable_versioning      = true
+s3_lifecycle_enabled      = true
+s3_transition_to_ia_days  = 30
+s3_expiration_days        = 365  # 2555 (7 years) for prod compliance
+
+# Secrets Manager Configuration
+secrets_recovery_window_days = 30
+secrets_enable_rotation      = false  # true for prod
+secrets_rotation_days        = 30
+
+# VPC Configuration
+vpc_cidr                     = "10.0.0.0/16"
+availability_zones_count     = 2              # 3 for prod
+vpc_single_nat_gateway       = true           # false for prod (HA)
+vpc_enable_flow_logs         = false          # true for prod
+vpc_enable_s3_endpoint       = false          # true for prod
+vpc_enable_secrets_endpoint  = false          # true for prod
