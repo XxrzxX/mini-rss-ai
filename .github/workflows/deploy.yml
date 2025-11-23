@@ -1,0 +1,244 @@
+name: Build and Deploy Docker Image
+
+on:
+  push:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'development' }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set environment variables
+      run: |
+        if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          echo "ENVIRONMENT=production" >> $GITHUB_ENV
+        else
+          echo "ENVIRONMENT=development" >> $GITHUB_ENV
+        fi
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+      with:
+        mask-password: 'true'
+
+    - name: Validate App Structure
+      run: |
+        echo "🔍 Validating app structure..."
+        
+        # Check backend files
+        if [ ! -f "backend/backend.py" ]; then
+          echo "❌ backend/backend.py not found"
+          exit 1
+        fi
+        
+        if [ ! -d "backend/migrations" ]; then
+          echo "❌ backend/migrations directory not found"
+          exit 1
+        fi
+        
+        # Check frontend files
+        if [ ! -f "app/main.py" ]; then
+          echo "❌ app/main.py not found"
+          exit 1
+        fi
+        
+        if [ ! -f "app/config.py" ]; then
+          echo "❌ app/config.py not found"
+          exit 1
+        fi
+        
+        if [ ! -d "app/pages" ]; then
+          echo "❌ app/pages directory not found"
+          exit 1
+        fi
+        
+        echo "✅ App structure validation passed"
+
+    - name: Build Docker Image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        if [ $? -ne 0 ]; then
+          echo "❌ Docker build failed"
+          exit 1
+        fi
+        echo "✅ Docker build successful"
+
+    - name: Scan Docker Image for Vulnerabilities
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+        IMAGE_TAG: ${{ github.sha }}
+        S3_BUCKET: ${{ secrets.S3_BUCKET }}
+        AWS_REGION: ${{ secrets.AWS_REGION }}
+      run: |
+        # Install Trivy scanner
+        sudo apt-get update > /dev/null 2>&1
+        sudo apt-get install wget apt-transport-https gnupg lsb-release > /dev/null 2>&1
+        wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add - > /dev/null 2>&1
+        echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list > /dev/null 2>&1
+        sudo apt-get update > /dev/null 2>&1
+        sudo apt-get install trivy > /dev/null 2>&1
+        
+        # Generate security report
+        REPORT_FILE="security-report-$(date +%Y%m%d-%H%M%S)-${{ github.sha }}.json"
+        trivy image --format json --output $REPORT_FILE $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG > /dev/null 2>&1
+        
+        # Upload report to S3
+        aws s3 cp $REPORT_FILE s3://$S3_BUCKET/security-reports/$REPORT_FILE > /dev/null 2>&1
+        if [ $? -eq 0 ]; then
+          echo "✅ Security report saved to S3"
+        else
+          echo "⚠️ Failed to save security report to S3"
+        fi
+        
+        # Check for HIGH/CRITICAL vulnerabilities
+        trivy image --exit-code 0 --severity HIGH,CRITICAL $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG > /dev/null 2>&1
+        if [ $? -eq 0 ]; then
+          echo "✅ Security scan completed"
+        else
+          echo "⚠️ Security vulnerabilities found - check S3 report"
+        fi
+        
+        # Clean up local report file
+        rm -f $REPORT_FILE
+
+    - name: Push Docker Image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG > /dev/null 2>&1
+        if [ $? -ne 0 ]; then
+          echo "❌ Docker push failed"
+          exit 1
+        fi
+        echo "✅ Docker push successful"
+
+    - name: Tag as Latest
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest > /dev/null 2>&1
+        if [ $? -eq 0 ]; then
+          echo "✅ Latest tag pushed successfully"
+        else
+          echo "❌ Failed to push latest tag"
+          exit 1
+        fi
+
+    - name: Deploy Backend to ECS
+      env:
+        ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+        ECS_BACKEND_SERVICE: ${{ secrets.ECS_BACKEND_SERVICE }}
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        # Get current backend task definition
+        echo "📋 Getting backend task definition..."
+        BACKEND_TASK_DEF=$(aws ecs describe-services --cluster $ECS_CLUSTER --services $ECS_BACKEND_SERVICE --query 'services[0].taskDefinition' --output text 2>/dev/null)
+        aws ecs describe-task-definition --task-definition $BACKEND_TASK_DEF --query 'taskDefinition' --output json > backend-task-def.json 2>/dev/null
+        
+        # Update backend image URI and clean up task definition
+        echo "🔄 Updating backend image URI..."
+        jq --arg IMAGE "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" '
+          .containerDefinitions[0].image = $IMAGE |
+          del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .placementConstraints, .compatibilities, .registeredAt, .registeredBy)
+        ' backend-task-def.json > new-backend-task-def.json 2>/dev/null
+        
+        # Validate the new task definition
+        if ! jq empty new-backend-task-def.json 2>/dev/null; then
+          echo "❌ Invalid backend task definition JSON generated"
+          exit 1
+        fi
+        
+        # Register new backend task definition
+        echo "📝 Registering new backend task definition..."
+        NEW_BACKEND_TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file://new-backend-task-def.json --query 'taskDefinition.taskDefinitionArn' --output text 2>/dev/null)
+        if [ $? -ne 0 ]; then
+          echo "❌ Failed to register backend task definition"
+          exit 1
+        fi
+        
+        # Update backend service
+        echo "🚀 Updating backend ECS service..."
+        aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_BACKEND_SERVICE --task-definition "$NEW_BACKEND_TASK_DEF_ARN" > /dev/null 2>&1
+        if [ $? -eq 0 ]; then
+          echo "✅ Backend ECS deployment successful"
+        else
+          echo "❌ Backend ECS deployment failed"
+          exit 1
+        fi
+        
+        # Cleanup
+        rm -f backend-task-def.json new-backend-task-def.json
+
+    - name: Deploy Frontend to ECS
+      env:
+        ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+        ECS_FRONTEND_SERVICE: ${{ secrets.ECS_FRONTEND_SERVICE }}
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        # Get current frontend task definition
+        echo "📋 Getting frontend task definition..."
+        FRONTEND_TASK_DEF=$(aws ecs describe-services --cluster $ECS_CLUSTER --services $ECS_FRONTEND_SERVICE --query 'services[0].taskDefinition' --output text 2>/dev/null)
+        aws ecs describe-task-definition --task-definition $FRONTEND_TASK_DEF --query 'taskDefinition' --output json > frontend-task-def.json 2>/dev/null
+        
+        # Update frontend image URI and clean up task definition
+        echo "🔄 Updating frontend image URI..."
+        jq --arg IMAGE "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" '
+          .containerDefinitions[0].image = $IMAGE |
+          del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .placementConstraints, .compatibilities, .registeredAt, .registeredBy)
+        ' frontend-task-def.json > new-frontend-task-def.json 2>/dev/null
+        
+        # Validate the new task definition
+        if ! jq empty new-frontend-task-def.json 2>/dev/null; then
+          echo "❌ Invalid frontend task definition JSON generated"
+          exit 1
+        fi
+        
+        # Register new frontend task definition
+        echo "📝 Registering new frontend task definition..."
+        NEW_FRONTEND_TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file://new-frontend-task-def.json --query 'taskDefinition.taskDefinitionArn' --output text 2>/dev/null)
+        if [ $? -ne 0 ]; then
+          echo "❌ Failed to register frontend task definition"
+          exit 1
+        fi
+        
+        # Update frontend service
+        echo "🚀 Updating frontend ECS service..."
+        aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_FRONTEND_SERVICE --task-definition "$NEW_FRONTEND_TASK_DEF_ARN" > /dev/null 2>&1
+        if [ $? -eq 0 ]; then
+          echo "✅ Frontend ECS deployment successful"
+        else
+          echo "❌ Frontend ECS deployment failed"
+          exit 1
+        fi
+        
+        # Cleanup
+        rm -f frontend-task-def.json new-frontend-task-def.json

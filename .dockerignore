@@ -1,0 +1,62 @@
+# Virtual environments
+myenv1/
+venv/
+env/
+.env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Large files
+*.deb
+*.deb.*
+
+# Terraform
+terraform/
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Logs
+*.log
+
+# Documentation
+README.md
+SECURITY-REFERENCE.md
+
+# Docker
+docker-compose.yml
+Dockerfile.*
+
+# GitHub
+.github/
+
+# Coverage and testing
+.coverage
+.pytest_cache
+.mypy_cache
+coverage.xml
+nosetests.xml
+
+# Temporary files
+tmp/
+temp/
