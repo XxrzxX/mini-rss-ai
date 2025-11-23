@@ -1,6 +1,6 @@
 # 🤖 RSS Chat Assistant ✨
 
-🚀 AI-powered RSS reader with AI chat using AWS Bedrock Nova Lite! 
+ AI-powered RSS reader with AI chat using AWS Bedrock Nova Lite! 
 
 > **💡 Note:** This project is just the beginning of a great idea! 🌟
 
@@ -25,17 +25,17 @@ cp terraform.tfvars.prod.example terraform.tfvars
 terraform init && terraform apply
 ````
 
-### 3. 🎉 Use
+### 3. Use
 Open the URL from deploy output and start chatting with your RSS feeds! 💫
 
 ## 📋 What you need
-- ☁️ AWS account
-- 🔧 AWS CLI configured
-- 🏗️ Terraform installed
-- 🐙 Github account
+- AWS account
+- AWS CLI configured
+- Terraform installed
+- Github account
 
 ## 🏗️ Architecture
 ![Architecture Diagram](./Assest/Basic_infra_v1.png)
 
 ## 📄 License
-MIT 📜
+[MIT](./LICENSE) 
